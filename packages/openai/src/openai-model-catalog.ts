@@ -1,4 +1,59 @@
-import type { ModelCapabilities, ModelEntry } from '@ai-sdk/provider';
+import type {
+  ModelCapabilities,
+  ModelCapability,
+  ModelEntry,
+  ProviderOptionDefinition,
+  ProviderOptionDefinitions,
+} from '@ai-sdk/provider';
+import type { OpenAILanguageModelResponsesOptions } from './responses/openai-responses-language-model-options';
+
+type OpenAILanguageProviderOption = keyof OpenAILanguageModelResponsesOptions;
+
+/**
+ * Options accepted under `providerOptions.openai`. Language options are the
+ * Responses API options. The `satisfies` check keeps this list in sync with
+ * the option schema.
+ */
+export const openaiProviderOptions = {
+  language: {
+    conversation: { description: 'OpenAI Conversation ID to continue.' },
+    include: { description: 'Extra fields to include in the response.' },
+    includeWebSearchSources: {
+      description: 'Include web search action sources.',
+    },
+    instructions: { description: 'Instructions for the model.' },
+    logprobs: { description: 'Return token log probabilities.' },
+    maxToolCalls: { description: 'Maximum number of built-in tool calls.' },
+    metadata: { description: 'Metadata to store with the generation.' },
+    parallelToolCalls: { description: 'Whether to use parallel tool calls.' },
+    previousResponseId: { description: 'Previous response ID to continue.' },
+    promptCacheKey: { description: 'Cache key for prompt caching.' },
+    promptCacheOptions: { description: 'Prompt cache mode, TTL, and prewarm.' },
+    promptCacheRetention: { description: 'Prompt cache retention policy.' },
+    reasoningEffort: { description: 'Reasoning effort.' },
+    reasoningEffortUpdate: {
+      description: 'Reasoning effort update from this response onward.',
+    },
+    reasoningMode: { description: 'Standard or pro reasoning mode.' },
+    reasoningContext: { description: 'Which reasoning items can be used.' },
+    reasoningSummary: { description: 'Reasoning summary output.' },
+    safetyIdentifier: { description: 'Identifier for safety monitoring.' },
+    serviceTier: { description: 'Service tier for the request.' },
+    store: { description: 'Whether to store the generation.' },
+    passThroughUnsupportedFiles: {
+      description: 'Send non-image file types as generic input files.',
+    },
+    strictJsonSchema: { description: 'Use strict JSON schema validation.' },
+    textVerbosity: { description: 'Verbosity of text responses.' },
+    truncation: { description: 'Output truncation behavior.' },
+    user: { description: 'End-user identifier for abuse monitoring.' },
+    systemMessageMode: { description: 'System message role override.' },
+    forceReasoning: { description: 'Treat the model as a reasoning model.' },
+    contextManagement: { description: 'Server-side context compaction.' },
+    compactionTrigger: { description: 'Request explicit compaction.' },
+    allowedTools: { description: 'Restrict callable tools to a subset.' },
+  } satisfies Record<OpenAILanguageProviderOption, ProviderOptionDefinition>,
+} as const satisfies ProviderOptionDefinitions;
 
 export type OpenAILanguageModelEntry = {
   capabilities: {
@@ -16,6 +71,7 @@ export type OpenAILanguageModelEntry = {
       };
       promptCache: {
         retention: boolean;
+        options: ModelCapability;
       };
       endpoints: {
         chat: {
@@ -27,6 +83,9 @@ export type OpenAILanguageModelEntry = {
         };
       };
     };
+  };
+  providerOptions: {
+    language: Record<OpenAILanguageProviderOption, ModelCapability>;
   };
   requestConfig: {
     language: {
@@ -134,6 +193,9 @@ function createOpenAILanguageModelEntry(
     (gptVersion?.variant?.startsWith('chat') ?? false);
   const isGptNanoModel = gptVersion?.variant?.startsWith('nano') ?? false;
   const isGpt6OrLaterModel = gptVersion != null && gptVersion.major >= 6;
+  const isGpt56OrLaterModel =
+    isGpt6OrLaterModel ||
+    (gptVersion?.major === 5 && (gptVersion.minor ?? 0) >= 6);
   // Pro, codex, and chat variants are excluded because their supported
   // efforts are not known.
   const isStandardGpt5Model =
@@ -175,7 +237,7 @@ function createOpenAILanguageModelEntry(
     !modelId.startsWith('gpt-4o-search-preview') &&
     !modelId.startsWith('gpt-4o-mini-search-preview');
 
-  return {
+  const entry: Omit<OpenAILanguageModelEntry, 'providerOptions'> = {
     capabilities: {
       language: {
         inputs: definition?.capabilities?.language?.inputs ?? {
@@ -224,7 +286,11 @@ function createOpenAILanguageModelEntry(
           priority: supportsPriorityProcessing,
         },
         configurationUpdates: isGpt6OrLaterModel,
-        promptCache: { retention: !isGpt6OrLaterModel },
+        promptCache: {
+          retention: !isGpt6OrLaterModel,
+          // Prompt cache options are documented for GPT-5.6 and later.
+          options: isRecognizedModelFamily ? isGpt56OrLaterModel : 'unknown',
+        },
         endpoints: {
           chat: {
             temperatureWithoutReasoning:
@@ -248,6 +314,45 @@ function createOpenAILanguageModelEntry(
       },
     },
   };
+
+  // Options default to supported; exceptions reuse capabilities declared above.
+  const { language } = entry.capabilities;
+  return {
+    ...entry,
+    providerOptions: {
+      language: declareProviderOptions(
+        openaiProviderOptions.language,
+        definition != null ? true : 'unknown',
+        {
+          logprobs: language.sampling.logprobs,
+          maxToolCalls: language.tools.usage,
+          parallelToolCalls: language.tools.usage,
+          allowedTools: language.tools.usage,
+          reasoningEffort: language.reasoning.support,
+          reasoningSummary: language.reasoning.support,
+          reasoningMode: language.reasoning.support,
+          reasoningContext: language.reasoning.support,
+          reasoningEffortUpdate: language.configurationUpdates,
+          promptCacheOptions: language.promptCache.options,
+          promptCacheRetention: language.promptCache.retention,
+        },
+      ),
+    },
+  };
+}
+
+/** Applies one default support value to every option, except the listed ones. */
+function declareProviderOptions<Option extends string>(
+  definitions: Readonly<Record<Option, ProviderOptionDefinition>>,
+  support: ModelCapability,
+  exceptions: Partial<Record<Option, ModelCapability>>,
+): Record<Option, ModelCapability> {
+  return Object.fromEntries(
+    (Object.keys(definitions) as Option[]).map(option => [
+      option,
+      exceptions[option] ?? support,
+    ]),
+  ) as Record<Option, ModelCapability>;
 }
 
 function getGpt5ReasoningEfforts(minor: number): readonly string[] {
@@ -625,6 +730,9 @@ type OpenAIModelEntry = ModelEntry<OpenAIRequestConfig> & {
   capabilities: ModelCapabilities & {
     language?: OpenAILanguageModelEntry['capabilities']['language'];
   };
+  providerOptions?: {
+    language?: OpenAILanguageModelEntry['providerOptions']['language'];
+  };
 };
 
 const liveModelEntry = {
@@ -704,6 +812,14 @@ function combineModelEntries(
       const previous = entries.get(modelId);
       entries.set(modelId, {
         capabilities: { ...previous?.capabilities, ...entry.capabilities },
+        ...(previous?.providerOptions != null || entry.providerOptions != null
+          ? {
+              providerOptions: {
+                ...previous?.providerOptions,
+                ...entry.providerOptions,
+              },
+            }
+          : {}),
         ...(previous?.requestConfig != null || entry.requestConfig != null
           ? {
               requestConfig: {
@@ -729,9 +845,11 @@ export function getOpenAILanguageModelEntry(
 ): OpenAILanguageModelEntry {
   const entry = findModelEntry(modelId);
   return entry?.capabilities.language != null &&
+    entry.providerOptions?.language != null &&
     entry.requestConfig?.language != null
     ? {
         capabilities: { language: entry.capabilities.language },
+        providerOptions: { language: entry.providerOptions.language },
         requestConfig: { language: entry.requestConfig.language },
       }
     : createOpenAILanguageModelEntry(modelId);
