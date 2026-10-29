@@ -1,5 +1,13 @@
 # @ai-sdk/mcp
 
+## 2.0.88
+
+### Patch Changes
+
+- 1afa510: Graduate `StdioMCPTransport`, `MCPClient.listPrompts`, `MCPClient.getPrompt`, and `MCPAppRenderer` to stable APIs. Deprecate their experimental names while retaining them as compatible aliases. MCP events remain experimental.
+- Updated dependencies [5c247e9]
+  - @ai-sdk/provider-utils@5.0.72
+
 ## 2.0.87
 
 ### Patch Changes
